@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../turtle_web_ui_cli")))
+
+from commands.utils import validate_midway_token
 你提到的 CR（Code Review）后无法调用 + dry run 失败，大概率是 测试脚本找不到模块路径，或者 Brazil 环境下 PYTHONPATH 没有配置好。
 
 我们来一步步分析问题和解决方案：
