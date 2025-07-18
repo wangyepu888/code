@@ -1,3 +1,108 @@
+你说得对，这个报错确实又回到了我们最早遇到的那个核心问题：
+
+> ModuleNotFoundError: No module named 'turtle_web_ui_cli.commands'
+
+
+
+
+---
+
+从你刚刚发的整个 Brazil 输出判断：
+
+🧠 问题本质是：
+
+Brazil 构建环境中 没有正确设置 PYTHONPATH，导致它在执行 test/unit/commands/test_utils.py 时，无法找到 turtle_web_ui_cli.commands.utils 这个模块。
+
+
+---
+
+✅ 解法确认：
+
+你当前项目结构是这样的（从你之前的图中看）：
+
+turtle-cli-workspace/
+  └── src/
+        └── TurtleWebUICLI/
+              ├── turtle_web_ui_cli/
+              │     ├── commands/
+              │     │     └── utils.py
+              │     └── __init__.py
+              └── test/
+                    └── unit/
+                          └── commands/
+                                └── test_utils.py
+
+你需要确保 Brazil 在运行 pytest 时，把 src/TurtleWebUICLI 加入 PYTHONPATH。
+
+
+---
+
+✅ Brazil 设置 PYTHONPATH 的两种方法：
+
+✅ 方法 1：手动 Brazil Shell 测试验证
+
+你可以运行：
+
+brazil-build shell
+
+然后在 shell 里执行：
+
+export PYTHONPATH=$PWD/src/TurtleWebUICLI
+pytest test/unit/commands/test_utils.py
+
+如果这样能跑通，那说明根本问题只是 Brazil 没设置 PYTHONPATH。那我们就可以提交 CR 加上这个变量。
+
+
+---
+
+✅ 方法 2：提交 Brazil CR 让 test/build 自动设置 PYTHONPATH
+
+修改 Brazil 的构建配置文件，一般在：
+
+TurtleWebUICLI/brazil/config/common/configure
+
+加入：
+
+export PYTHONPATH=$BRAZIL_WORKSPACE/src/TurtleWebUICLI
+
+或者如果是 Makefile 或 shell 脚本做 test entry point，也要加进去这个 export。
+
+
+---
+
+🧪 快速验证方式（推荐你马上试）：
+
+cd /home/ambrowaw/workplace/turtle-cli-workspace/src/TurtleWebUICLI
+export PYTHONPATH=$(pwd)
+pytest test/unit/commands/test_utils.py
+
+如果这能跑通，那我们可以立即 conclude：你的代码逻辑没问题，问题是 Brazil 没设 PYTHONPATH。
+
+
+---
+
+🧩 导入语句也确认下
+
+你的 test 文件中应保持如下导入：
+
+from turtle_web_ui_cli.commands.utils import validate_midway_token
+
+
+---
+
+✅ 总结你要做的事情：
+
+步骤	操作
+
+✅ 1	cd src/TurtleWebUICLI && export PYTHONPATH=$(pwd)
+✅ 2	pytest test/unit/commands/test_utils.py 看能否跑通
+✅ 3	如果跑通了，Brazil 中配置 PYTHONPATH
+✅ 4	保留 from turtle_web_ui_cli.commands.utils import validate_midway_token
+
+
+我可以帮你起草一个 Brazil CR 的 configure 环境变量 patch，如果你需要。你先跑通手动 export + pytest 看看是否能通。需要我写具体命令或者 Brazil patch 文件吗？
+
+
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../turtle_web_ui_cli")))
