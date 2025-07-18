@@ -1,3 +1,114 @@
+你提到的 CR（Code Review）后无法调用 + dry run 失败，大概率是 测试脚本找不到模块路径，或者 Brazil 环境下 PYTHONPATH 没有配置好。
+
+我们来一步步分析问题和解决方案：
+
+
+---
+
+✅ 一、问题本质
+
+你的项目结构是这样的：
+
+turtle-cli-workspace/
+├── src/
+│   └── TurtleWebUICLI/
+│       └── commands/
+│           └── utils.py
+└── test/
+    └── unit/
+        └── commands/
+            └── test_utils.py
+
+但在 Brazil 或 dry run 运行时，Python 默认不会把 src/ 加入模块搜索路径，导致：
+
+> ModuleNotFoundError: No module named 'TurtleWebUICLI'
+
+
+
+
+---
+
+✅ 二、解决方案
+
+✅ 方法 1：Brazil-friendly 设置 PYTHONPATH
+
+如果你是通过 Brazil 构建，Brazil 的 buildspec.yml 或打包脚本中必须加：
+
+export PYTHONPATH=src
+
+在 Brazil Dry Run 环境中，PYTHONPATH 不会自动加 src/，你得显式指定。
+
+
+---
+
+✅ 方法 2：项目根目录放 conftest.py（如果用 pytest）
+
+创建这个空文件可帮助 pytest 正确识别模块结构：
+
+turtle-cli-workspace/
+└── test/
+    └── conftest.py   ← 空文件
+
+
+---
+
+✅ 方法 3：使用 setup.py + editable install（高级）
+
+如果你 Brazil 项目支持 setup.py 安装结构，你可以加：
+
+# setup.py
+from setuptools import setup, find_packages
+
+setup(
+    name="TurtleWebUICLI",
+    version="0.1",
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
+)
+
+然后在 Brazil 构建中执行：
+
+pip install -e .
+
+
+---
+
+✅ 三、补充建议（对 Brazil 特别重要）
+
+建议	说明
+
+✅ PYTHONPATH=src	最快最兼容 Brazil dry-run 的方法
+✅ 不要用硬编码 sys.path	容易被 CR 拒掉
+✅ 所有 import 用大写模块名	比如 from TurtleWebUICLI.commands import utils
+✅ 测试文件中不要用绝对路径导入	Brazil 封装环境会失败
+
+
+
+---
+
+🛠 你现在应该做的检查
+
+1. 进入 CLI 根目录，运行：
+
+PYTHONPATH=src python -m unittest discover test
+
+
+2. 如果成功了，就在 Brazil 构建或测试脚本中加：
+
+export PYTHONPATH=src
+
+
+3. 确保 test_utils.py 里面写的是：
+
+from TurtleWebUICLI.commands.utils import validate_midway_token
+
+
+
+
+---
+
+需要我帮你写 Brazil build/test 配置文件（比如 buildspec.yml 或 test.sh）吗？只要你贴一下当前 Brazil 的脚本结构，我可以替你配置好。
+
 这个 cookie 是本地 Midway 验证后的 cookie —— 存在 ~/.midway/cookie 文件中，包含完整认证状态（session、amzn_sso_token 等），是你本机登录 AWS 后 Midway SSO 认证完成的凭证。
 
 
