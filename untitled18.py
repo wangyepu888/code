@@ -1,3 +1,15 @@
+修改 test_utils.py 顶部为：
+
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../src/TurtleWebUICLI")))
+from turtle_web_ui_cli.commands.utils import validate_midway_token
+
+
+2. 本地用 Brazil 执行：
+
+brazil-runtime-exec python3 -m pytest test/unit/commands/test_utils.py -v
+
 你说得对，这个报错确实又回到了我们最早遇到的那个核心问题：
 
 > ModuleNotFoundError: No module named 'turtle_web_ui_cli.commands'
