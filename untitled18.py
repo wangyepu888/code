@@ -1,3 +1,51 @@
+你的思路其实没问题——用 http.cookiejar.MozillaCookieJar 读磁盘，再把它们灌进 requests.Session 的 cookie jar。但是你图里代码处理流程里有两处「隐形过滤」，把 13 条裹进去后又只剩 2 条：
+
+update(cookie_jar) 并不会把所有条目都加到 Session
+
+python
+Copy
+Edit
+cookie_jar = MozillaCookieJar(str(cookie_path))
+cookie_jar.load(...)
+self.session.cookies.update(cookie_jar)
+这一步只会把 cookiejar 里domain、path 完全匹配当前请求域名的几条“默认” cookie 加到 session.cookies；其余那些属于 .auth.midway.amazon.dev、.midway-auth.amazon.com、auth.midway.aws.dev 等域的条目都被丢掉了。
+
+在真正发请求时你又做了二次过滤
+
+python
+Copy
+Edit
+domain_cookies = {
+  c.name: c.value
+  for c in self.session.cookies
+  if target_domain.endswith(c.domain.lstrip('.'))
+}
+response = self.session.get(..., cookies=domain_cookies)
+你只把与 target_domain（corp.management-ui.turtle.aws.dev）严格匹配或后缀匹配的那几条拿出来用，其他域的就都删了。
+
+—— 所以整个流程读进来了 13 条，灌给 session 后只剩能 match 当前 host 的 2 条，再传给 requests.get(..., cookies=…) 时又被精简成 2 条。
+👣 改进建议
+只要把这两个过滤点拆掉，保留完整的 13 条，就能让后端正确识别你的 SSO 会话：
+把完整 cookie_jar 转给 session，而不要用 update
+python
+Copy
+Edit
+for cookie in cookie_jar:
+    # cookie is a http.cookiejar.Cookie
+    self.session.cookies.set_cookie(cookie)
+这样不管 domain、path，所有条目都进了 session。
+
+不要在 get() 里再传 cookies=
+requests.get(..., cookies=…) 会替你 override 掉 session 里原来的 cookies ，所以把它删掉：
+python
+Copy
+Edit
+response = self.session.get(url,
+                            headers=headers,
+                            allow_redirects=True,
+                            timeout=(5,15))
+这样，session 发出的每个请求，requests 底层的 HTTP 头里就会自动带上全部 13 条 cookie。你再把 allow_redirects=True 打开，就能绕过一切 307→SSO 的重定向，直接到达真正的 role-mappings API。
+
 项目背景：我们在做一个 Python CLI，用于从公司内部的 React Web UI（路径 /role-mappings-view）抓取 role mappings 数据并支持表格/JSON/CSV 输出。该 UI 受 Midway SSO 保护，登录后会话信息以 13 条 HttpOnly/secure 的 cookie 存在本地 ~/.midway/cookie。
 
 遇到的问题：在本地用 Python 的 http.cookiejar 直接加载磁盘 cookie 并拼到 HTTP 请求头上，可以拿到全部 13 条并成功认证；但在 Amazon 的 Brazil 环境（无头浏览器或前端 JS）里，document.cookie 只能看到 2 条非‑HttpOnly cookie，导致后端始终重定向到 SSO，无法获取数据。
