@@ -1,3 +1,275 @@
+在 Brazil 环境里，你其实是在跑从 setup.py 打包安装后的代码，而不是直接从你工作区的源码里按你本地 Python 那样「随便插个 sys.path」去加载模块。所以即便你在本地跑 python3 api_client.py 能拿到 13 条 cookie，Brazil 里面跑就只能拿到 2 条——因为它根本没加载到那段你在本地改的 main 或者 sys.path.insert 的逻辑。
+
+一步步排查：到底加载了哪个 main？
+先在 Brazil 里把真正被执行的文件路径和 sys.path 打印出来，确认它加载的到底是哪个模块：
+
+bash
+Copy
+Edit
+# 查看安装后包的位置和入口
+brazil-runtime-exec python -c "import turtle_web_ui_cli; print('package at', turtle_web_ui_cli.__file__)"
+# 查看它的模块搜索路径
+brazil-runtime-exec python -c "import sys; print('\n'.join(sys.path))"
+你会发现它指向的是 /usr/local/lib/python3.9/site-packages/turtle_web_ui_cli/... 而不是你工作区下的 src/TurtleWebUiCLI/src/turtle_web_ui_cli。
+
+根本解法：用 entry_points+正确打包，别靠本地黑科技
+移除 你在 __main__.py 里写的 sys.path.insert(...)。
+
+在 setup.py 里加入一个合法的 entry_points，让 Brazil 安装时自动产生一个 turtle-cli 脚本，直接调用你的包里的 cli()：
+
+python
+Copy
+Edit
+from setuptools import setup, find_packages
+
+setup(
+    name="TurtleWebUiCLI",
+    version="1.0.0",
+    package_dir={"": "src"},
+    packages=find_packages(where="src"),
+    install_requires=[
+        "click",
+        "requests",
+        "tabulate",
+        # … 其它依赖
+    ],
+    entry_points={
+        "console_scripts": [
+            # 左边是你在 shell 里敲的命令，右边是模块:函数
+            "turtle-cli = turtle_web_ui_cli.cli:cli",
+        ]
+    },
+)
+确保你的源码里 src/turtle_web_ui_cli/cli.py（或者 main.py）里有：
+
+python
+Copy
+Edit
+import click
+# … import 你所有的 commands
+@click.group()
+def cli():
+    """Turtle Web UI CLI"""
+    pass
+
+# 把各个子命令注册进来
+cli.add_command(role_mapping_commands)
+cli.add_command(search_commands)
+# …
+
+if __name__ == "__main__":
+    cli()
+然后在 Brazil 里重新走一次：
+
+bash
+Copy
+Edit
+brazil-build clean
+brazil-build     # 会重新安装你的包，并且生成 turtle-cli 可执行
+这样 Brazil 环境和你本地 Python 就会用同一份「打包出来的」代码，cli()、setup_cookies()、export_cookies_to_json()、get() 等都统一一致，拿到的 cookie 数量也就一样了。
+
+为什么这么做？
+本地跑：你直接在源码目录下 python api_client.py，Python 会把当前目录加到 sys.path，所以“黑科技”一行 sys.path.insert(...) 就生效了。
+
+Brazil 跑：它先用 setup.py install（或等价流程）把你的包装到 site-packages 里，再去执行 entry point，你本地那条 sys.path.insert 根本不会被执行到。
+
+entry_points：这是 Python 标准的 CLI 发布方式，既干净又可靠，打包后所有环境（本地／CI／Brazil）行为都一致。
+
+下一步
+
+把本地那段 sys.path hack 干掉。
+
+把上面的 entry_points 配置加进你的 setup.py。
+
+在 Brazil 里 brazil-build clean && brazil-build，确认它成功打包、安装，并且 turtle-cli 调用的是你刚刚打的新版本。
+
+再跑一次 turtle-cli fetch-role-mappings …，应该就能拿到完整的 13 条 cookie 了。
+
+
+
+
+
+
+
+
+
+Ask ChatGPT
+You said:
+Sys...这个对应的python.  另外一个则是brazil
+
+
+ChatGPT said:
+
+已思考若干秒
+没错，你看到的
+
+bash
+Copy
+Edit
+# 本地 Python
+python3 -c "import sys; print(sys.executable); print(sys.path)"
+# Brazil 运行环境
+brazil-runtime-exec python -c "import sys; print(sys.executable); print(sys.path)"
+两者的输出刚好对应：第一行打印的是你在工作区里装好的 /home/…/src/TurtleWebUiCLI/src，第二行打印的则是一堆 site-packages 路径，并不包含你的源码目录。
+
+为什么会这样？
+本地直接 python api_client.py：Python 会把当前目录（以及你自己插入的 sys.path.insert(...)）当成模块根，就能顺利找到 turtle_web_ui_cli.commands，加载你在 src/ 下的源码。
+
+Brazil 里跑：它先把你的包从 setup.py 安装到 Python 的 site-packages，然后再 import，就 永远 不会去查你本地的 src/，也就不会执行那段 sys.path.insert hack，自然也就只能加载到安装包里残留的旧代码（或漏了子模块）。
+
+下一步：用标准打包把本地源码装进 Brazil 环境
+删掉 源码里所有 sys.path.insert(...) 的黑科技；
+
+在 setup.py 里加上正确的包信息和 entry_points，示例：
+
+python
+Copy
+Edit
+from setuptools import setup, find_packages
+
+setup(
+    name="TurtleWebUiCLI",
+    version="1.0.0",
+    package_dir={"": "src"},
+    packages=find_packages(where="src"),
+    install_requires=[
+        "click",
+        "requests",
+        "tabulate",
+        # … 其它依赖
+    ],
+    entry_points={
+        "console_scripts": [
+            "turtle-cli = turtle_web_ui_cli.cli:cli",
+        ]
+    },
+)
+确保你的 src/turtle_web_ui_cli/cli.py（或 __main__.py）里定义了一个带 @click.group() 的 cli() 函数，并且在最后有：
+
+python
+Copy
+Edit
+if __name__ == "__main__":
+    cli()
+然后在 Brazil 里重新打包安装并跑测试：
+
+bash
+Copy
+Edit
+brazil-build clean
+brazil-build       # 会重装你的包，并在 PATH 中生成 turtle-cli
+turtle-cli fetch-role-mappings …  # 或者跑其它命令
+这样，无论是你本地直接跑 Python，还是 Brazil 环境里用 turtle-cli、brazil-runtime-exec，都会加载 同一份、经过 setup.py 打包后的代码，setup_cookies()、get()、export_cookies_to_json() 等都会一致生效，你也就能在 Brazil 下拿到完整的 13 条 cookie 了。
+
+
+
+
+
+
+
+
+You said:
+你是指我的python一直调用旧的嘛 cookie
+
+
+ChatGPT said:
+
+已思考若干秒
+不完全是 Cookie 的问题，核心在于运行时到底载入的是哪份代码：
+
+本地 python3 api_client.py
+
+它会把你当前目录（src/TurtleWebUiCLI/src）当成包根，所以永远加载的是你编辑过的最新源码，能够正确读到 13 条 Cookie。
+
+Brazil 环境里的 brazil-runtime-exec python …
+
+它先从你的 setup.py 打包产物里把 TurtleWebUiCLI 安装到 site-packages，然后再去那儿 import，根本不会去碰你工作区下的 src 目录。
+
+如果你的打包配置里没把新加的子模块（或者改好的代码）都包含进去，Brazil 就拿不到那些改动，最终只能解析到默认那两条 Cookie。
+
+怎么验证 “到底加载的是哪份”
+bash
+Copy
+Edit
+# 本地 Python 会打印你的工作区路径
+python3 -c "import turtle_web_ui_cli; print(turtle_web_ui_cli.__file__)"
+
+# Brazil 下就会打印 site-packages 里那个 egg/whl
+brazil-runtime-exec python -c "import turtle_web_ui_cli; print(turtle_web_ui_cli.__file__)"
+如果两者路径不一致，就说明 Brazil 并没有在用你本地的源码。
+
+解决方案：把最新源码打包进 Brazil
+删掉 任何 sys.path.insert(...) 的 hack，让你的包只通过标准的安装流程被发现；
+
+在 setup.py 里像下面这样写好 package_dir、find_packages() 和 entry_points：
+
+python
+Copy
+Edit
+from setuptools import setup, find_packages
+
+setup(
+    name="TurtleWebUiCLI",
+    version="1.0.0",
+    package_dir={"": "src"},
+    packages=find_packages(where="src"),
+    install_requires=[
+        "click",
+        "requests",
+        "tabulate",
+        # … 其他依赖
+    ],
+    entry_points={
+        "console_scripts": [
+            "turtle-cli = turtle_web_ui_cli.cli:cli",
+        ]
+    },
+)
+确保你的源码目录结构是
+
+markdown
+Copy
+Edit
+src/
+  turtle_web_ui_cli/
+    __init__.py
+    cli.py          # 定义 @click.group() 的 cli()
+    commands/
+      __init__.py
+      utils.py      # validate_midway_token() 等
+      api_client.py
+      …
+然后在 Brazil 里彻底重建：
+
+bash
+Copy
+Edit
+brazil-build clean
+brazil-build
+这样 Brazil 会安装你打包里的最新版本，并且在 PATH 上提供 turtle-cli，所有命令（包括读取 13 条 Cookie 的那段逻辑）就都会和本地 python3 api_client.py 完全一致了。
+
+只要保证打包配置把你自己写的所有模块都装进去，Brazil 环境下就不会再 “只有两个 Cookie” 了。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 看起来既然你在两边都 dump 了原始的 .midway/cookie 文件，内容完全相同，却只有 Brazil 那边用 MozillaCookieJar 只装了两条、本地 Python 能装 13 条，那问题就不在文件本身，而在那颗“解析器”──MozillaCookieJar.load() 在 Brazil 里的 Python3.9 环境中漏掉了大部分条目。
 
 最简单的办法，就是绕开这个不可靠的 loader，自己手写一个小段解析，把每一行都变成一个 requests cookie，然后一股脑儿丢进你的 Session：
