@@ -1,3 +1,71 @@
+看了你最新贴的代码，问题其实出在你那段「手动读文件、跳过 # 行再 create_cookie」的逻辑上。Netscape 格式里，所有带 HttpOnly 标记的 cookie 行都是以 #HttpOnly_… 开头的——并不是注释！你却把一切以 # 开头的行都直接跳过了，结果只解析到那两条不带 HttpOnly 前缀的「普通」cookie。
+
+最简洁的修复方法
+直接放弃手写解析，彻底交给 MozillaCookieJar 来做：
+
+python
+Copy
+Edit
+from http.cookiejar import MozillaCookieJar
+import requests
+
+def setup_cookies(self):
+    cookie_path = Path.home()/".midway"/"cookie"
+    jar = MozillaCookieJar(str(cookie_path))
+    jar.load(ignore_discard=True, ignore_expires=True)
+
+    # 把所有 cookie 逐条注入 session，而不是 session.cookies.update()
+    for c in jar:
+        self.session.cookies.set_cookie(c)
+
+    self.logger.debug(f"Total cookies in session: {len(self.session.cookies)}")
+这样不管是普通 cookie 还是 #HttpOnly_… 前缀的 HttpOnly cookie，都能被 cookiejar 正确读进来并注入到 requests.Session。
+
+然后把你的 get() 方法里关于 cookies= 的那一段删掉，让 self.session.get() 自己带上完整的 session.cookies：
+
+python
+Copy
+Edit
+def get(self, endpoint: str, **kwargs):
+    url = f"{self.base_url}/{endpoint.lstrip('/')}"
+    headers = { **self.session.headers, **kwargs.pop("headers", {}) }
+    return self.session.get(
+        url,
+        headers=headers,
+        allow_redirects=True,   # 一定要真重定向
+        timeout=(5,15),
+        **kwargs
+    ).json()
+这样就不会再“贴”一个只有 2 条的 cookie 集合去覆盖原来的 session，而是把全部 13 条完整地带上，从根本上解决一直被 307 重定向回 SSO 的问题。
+
+如果你还想自己解析文件
+那就别把所有 # 行都当注释跳过，而是只跳真正的注释（通常是 # Netscape HTTP Cookie File 之类），保留 #HttpOnly_… 的那些行：
+
+python
+Copy
+Edit
+for line in content:
+    if line.startswith("# Netscape"):     # 只跳标准注释头
+        continue
+    # 接下来不判断 line.startswith('#')，因为 #HttpOnly_ 开头的行才是真 cookie
+    fields = line.split("\t")
+    # …接着按域名、path、secure、expires、name、value 拆字段…
+但既然标准库能一把搞定，就推荐用第一种方案，稳定又少 Bug。这样修改后，你在 Brazil 环境跑，也能一次性拿到完整的 SSO 会话 cookie。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 你的思路其实没问题——用 http.cookiejar.MozillaCookieJar 读磁盘，再把它们灌进 requests.Session 的 cookie jar。但是你图里代码处理流程里有两处「隐形过滤」，把 13 条裹进去后又只剩 2 条：
 
 update(cookie_jar) 并不会把所有条目都加到 Session
