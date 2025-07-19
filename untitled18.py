@@ -1,3 +1,110 @@
+项目背景：我们在做一个 Python CLI，用于从公司内部的 React Web UI（路径 /role-mappings-view）抓取 role mappings 数据并支持表格/JSON/CSV 输出。该 UI 受 Midway SSO 保护，登录后会话信息以 13 条 HttpOnly/secure 的 cookie 存在本地 ~/.midway/cookie。
+
+遇到的问题：在本地用 Python 的 http.cookiejar 直接加载磁盘 cookie 并拼到 HTTP 请求头上，可以拿到全部 13 条并成功认证；但在 Amazon 的 Brazil 环境（无头浏览器或前端 JS）里，document.cookie 只能看到 2 条非‑HttpOnly cookie，导致后端始终重定向到 SSO，无法获取数据。
+
+核心思路：先用 Python 读取并序列化那 13 条 cookie 为 JSON，然后在 Brazil/Playwright 中通过 context.add_cookies(...) 注入到浏览器上下文，让所有后续 fetch/XHR 自动带上完整凭证，从而绕过 SSO 重定向，稳定地抓取前端数据。
+
+
+1. 读取并转换本地 Cookie（在 Python 环境中完成）
+用 Python 加载 ~/.midway/cookie
+
+利用标准库 http.cookiejar.MozillaCookieJar（或 http.cookies.SimpleCookie）读出所有条目，包括 HttpOnly。
+
+序列化成纯 JSON 数组
+
+对每个 Cookie 生成一份对象：
+
+json
+Copy
+Edit
+{
+  "name": "session",
+  "value": "...",
+  "domain": "corp.management-ui.turtle.aws.dev",
+  "path": "/",
+  "httpOnly": true,
+  "secure": true,
+  "expires": 1690000000
+}
+把所有对象写到一个临时文件（比如 cookies.json），或直接通过标准输出传给下游脚本。
+
+2. 在 Brazil 中注入并使用这批 Cookie（在 JS/Playwright/Puppeteer 里完成）
+启动无头浏览器上下文
+
+js
+Copy
+Edit
+const { chromium } = require("playwright");  // 或 puppeteer
+const browser = await chromium.launch({ headless: true });
+const context = await browser.newContext();
+加载刚才的 JSON
+
+js
+Copy
+Edit
+const cookies = JSON.parse(fs.readFileSync("cookies.json", "utf8"));
+调用 addCookies
+
+js
+Copy
+Edit
+// Playwright:
+await context.addCookies(cookies);
+js
+Copy
+Edit
+// Puppeteer:
+await page.setCookie(...cookies);
+这样，即便是 HttpOnly、Secure，浏览器网络层也会自动把它们附到后续所有请求上。
+
+导航到 React 页面
+
+js
+Copy
+Edit
+const page = await context.newPage();
+await page.goto("https://corp.management-ui.turtle.aws.dev/role-mappings-view");
+这一跳就不会再被 307 或 SSO 拦截，而是能拿到真正渲染好的数据。
+
+抓取数据
+
+从全局变量（window.__INITIAL_STATE__）
+
+或拦截 XHR 返回
+
+或根据 DOM 结构读取表格行
+
+为什么必须这样？
+浏览器环境看不到 HttpOnly：document.cookie 读不到，但网络层会自动带上。
+
+Brazil 里没有直接读磁盘的能力：要先用 Python 把 Cookie 以结构化格式传进来。
+
+一旦注入，后续所有 fetch/XHR 都照常走：无须再模拟登录、CSRF、重定向。
+
+小结
+Python → 读磁盘 Cookie → JSON
+
+Brazil/JS → 加载 JSON → addCookies → goto
+
+正常拿到前端数据 → 传回 Python/CLI → 渲染表格或导出
+
+按这个思路走，就能在纯 Brazil 的流水线里成功带上那 13 条 Midway cookie，绕过 SSO 重定向，稳定抓到 role mappings。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 修改 test_utils.py 顶部为：
 
 import sys
