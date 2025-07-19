@@ -1,3 +1,53 @@
+看起来既然你在两边都 dump 了原始的 .midway/cookie 文件，内容完全相同，却只有 Brazil 那边用 MozillaCookieJar 只装了两条、本地 Python 能装 13 条，那问题就不在文件本身，而在那颗“解析器”──MozillaCookieJar.load() 在 Brazil 里的 Python3.9 环境中漏掉了大部分条目。
+
+最简单的办法，就是绕开这个不可靠的 loader，自己手写一个小段解析，把每一行都变成一个 requests cookie，然后一股脑儿丢进你的 Session：
+
+python
+Copy
+Edit
+from pathlib import Path
+from requests import Session, cookies
+
+def load_midway_cookies_manually(session: Session) -> None:
+    cookie_path = Path.home()/".midway"/"cookie"
+    if not cookie_path.exists():
+        raise FileNotFoundError(f"No midway cookie at {cookie_path!r}")
+
+    jar = cookies.RequestsCookieJar()
+    for raw in cookie_path.read_text().splitlines():
+        if not raw.strip() or raw.startswith("#"):
+            continue
+        # Netscape 格式: domain \t flag \t path \t secure \t expires \t name \t value
+        parts = raw.split("\t")
+        if len(parts) < 7:
+            continue
+        domain, _, path, secure_flag, expires, name, value = parts[:7]
+        secure = secure_flag.lower() == "true"
+        # 去掉开头的点
+        if domain.startswith("."):
+            domain = domain[1:]
+        c = cookies.create_cookie(
+            name=name,
+            value=value,
+            domain=domain,
+            path=path,
+            secure=secure,
+            expires=None if expires in ("0", "") else int(expires),
+        )
+        jar.set_cookie(c)
+    session.cookies = jar
+只要调用一次：
+
+python
+Copy
+Edit
+session = Session()
+load_midway_cookies_manually(session)
+就能保证把文件里所有的 13 条都塞进 session.cookies，不再依赖 MozillaCookieJar.load()。
+之后你在 Brazil 上的 SSO 验证、307 重定向就都能带上完整的 cookie，问题自然也就解决了。
+
+
+
 看了你最新贴的代码，问题其实出在你那段「手动读文件、跳过 # 行再 create_cookie」的逻辑上。Netscape 格式里，所有带 HttpOnly 标记的 cookie 行都是以 #HttpOnly_… 开头的——并不是注释！你却把一切以 # 开头的行都直接跳过了，结果只解析到那两条不带 HttpOnly 前缀的「普通」cookie。
 
 最简洁的修复方法
