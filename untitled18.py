@@ -1,3 +1,140 @@
+而是 Brazil 并没有拿到你最新那段“手动逐行解析、包含 #HttpOnly_ 前缀” 的代码，而是还在用旧版的 MozillaCookieJar.load()（它会把绝大多数行都当成注释丢掉，所以最终只剩两条）。
+
+下一步检查和修复流程
+验证 Brazil 跑的是哪个文件
+在本地和 Brazil 里分别执行：
+
+bash
+Copy
+Edit
+python3 -c "import turtle_web_ui_cli; print(turtle_web_ui_cli.__file__)"
+brazil-runtime-exec python -c "import turtle_web_ui_cli; print(turtle_web_ui_cli.__file__)"
+如果两边输出的路径不一样，就能说明 Brazil-build 安装的还是老版本。
+
+把你的新代码打包进去
+
+确保 setup.py（或 pyproject.toml）里正确包含了你的源码目录。一个最简的 setup.py 示例：
+
+python
+Copy
+Edit
+from setuptools import setup, find_packages
+
+setup(
+  name="TurtleWebUiCLI",
+  version="1.0.1",           # 每次改完记得 bump
+  package_dir={"": "src"},
+  packages=find_packages(where="src"),
+  install_requires=["click", "requests", "tabulate"],
+  entry_points={
+    "console_scripts": [
+      "turtle-cli = turtle_web_ui_cli.cli:cli",
+    ],
+  },
+)
+每次改代码都要更新 version，否则 Brazil 会跳过重复版本的构建。
+
+彻底重建 Brazil
+
+bash
+Copy
+Edit
+brazil-build clean
+brazil-build
+这样它才会重新把你本地的最新源码打包，运行时才能真正加载到那段手动解析逻辑。
+
+只要 Brazil 真正运行了你自己调通的那段“手动从 .midway/cookie 读 13 行——包括 #HttpOnly_… 前缀——然后 RequestsCookieJar 逐条 set_cookie” 的代码，就能拿到完整的 13 个 cookie，重定向也就不会再跑回登录页了。
+
+
+
+
+
+
+
+
+You said:
+那为何我每次修改代码 输出也会变化。 你是不是指我一直运行旧代码呢
+
+
+ChatGPT said:
+因为 Python 直 跑和 Brazil 打包后跑，实际上可能用的是两个不同的安装目录：
+
+本地直接运行时，你是在源码目录下做 python api_client.py（或 python -m turtle_web_ui_cli.commands.api_client），它当然每次都“看到”你刚改的文件。
+
+Brazil 环境里，它会把你当前的包打成一个 wheel/egg，然后装到一个只读的 build 镜像里。如果你不改版本号或不做 clean，Brazil 可能会跳过重打、继续用之前打好的包。
+
+如何验证
+在两边都跑一个小脚本，看看到底导入的是哪份文件 ：
+
+bash
+Copy
+Edit
+# 本地
+python3 - <<'PY'
+import turtle_web_ui_cli
+print("Python路径:", turtle_web_ui_cli.__file__)
+PY
+
+# Brazil
+brazil-runtime-exec python - <<'PY'
+import turtle_web_ui_cli
+print("Brazil路径:", turtle_web_ui_cli.__file__)
+PY
+如果这两个路径不一样，那就说明 Brazil 真在用旧版代码。
+
+彻底把你的最新改动带进 Brazil
+在 setup.py 里 bump 版本号
+
+diff
+Copy
+Edit
+-version="1.0.0",
++version="1.0.1",
+
+swift
+Copy
+Edit
+ 每次改完代码都得改一下版本，避免 Brazil 认为“没变”而跳过打包。
+
+2. **保证 `package_dir` 和 `find_packages` 覆盖到你的源码**  
+```python
+setup(
+  name="TurtleWebUiCLI",
+  version="1.0.1",
+  package_dir={"": "src"},
+  packages=find_packages(where="src"),
+  # …其余保持不变
+)
+清理并重建 Brazil
+
+bash
+Copy
+Edit
+brazil-build clean
+brazil-build
+这样才能强制它拉最新的源码去打包、安装到那个隔离镜像里。
+
+再跑一次路径验证，确认 Brazil 环境下也在引用到你更新后的文件。
+
+完成以上流程后，Brazil 里就会执行到你最新的 “手动逐行解析 .midway/cookie、包括 #HttpOnly_ 行、用 RequestsCookieJar.set_cookie” 的逻辑，也就能拿到全部 13 个 cookies 了，不会再掉回去只读两条了。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 在 Brazil 环境里，你其实是在跑从 setup.py 打包安装后的代码，而不是直接从你工作区的源码里按你本地 Python 那样「随便插个 sys.path」去加载模块。所以即便你在本地跑 python3 api_client.py 能拿到 13 条 cookie，Brazil 里面跑就只能拿到 2 条——因为它根本没加载到那段你在本地改的 main 或者 sys.path.insert 的逻辑。
 
 一步步排查：到底加载了哪个 main？
