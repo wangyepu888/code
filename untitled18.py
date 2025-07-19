@@ -1,3 +1,174 @@
+你好！这是一个非常经典且棘手的环境差异问题。你已经做了非常详尽的排查，思路清晰，日志和验证过程都非常专业。这为定位问题提供了巨大帮助。
+
+根据你提供的所有信息，最有可能的原因是 Python 版本差异（本地 3.12 vs. Brazil 3.9）导致的 http.cookiejar 库在解析 Cookie 文件时的行为不一致。
+
+为什么这是最可能的原因？
+核心证据：你已经验证了在 Brazil 容器内，~/.midway/cookie 文件的内容是完整且一字不差的。这几乎排除了所有关于文件路径、权限、或文件本身损坏的可能性。问题显然出在**“如何解读这个文件”**上，而不是“能否找到这个文件”。
+
+http.cookiejar 的演进：http.cookiejar 用于解析的是 Netscape 格式的 cookie 文件。这个格式虽然普遍，但有一些历史遗留的“模糊地带”（例如，域名前是否必须带 .，HttpOnly 等扩展属性如何标记，过期时间的格式等）。Python 在不同的大版本更新中，对这个库的解析严格程度、对异常行的容忍度都可能发生变化。
+
+一个非常常见的情况是：Python 3.9 的解析器可能在遇到某一个它认为“不规范”的 cookie 行时，会直接报错或静默跳过（甚至停止解析后续所有行），而 Python 3.12 的解析器可能已经修复了这个问题，变得更加健壮，能够容忍这种不规范。
+
+既然你能读到 2 个 Cookie，这说明解析器启动了，但很可能在第 3 个或之后的某个 Cookie 行上遇到了它无法处理的格式，然后就中止了。
+
+其他可能性被削弱：
+
+重定向问题：如你分析，这个问题发生在请求发起之前的 cookie 加载阶段，所以和重定向无关。
+
+环境变量：虽然有可能，但环境变量通常会影响整个 cookie 文件的加载路径（导致一个都读不到），或者完全改变 requests 的行为，而不太可能造成“13个变2个”这种精确的部分失败。
+
+requests 库本身：requests 依赖 http.cookiejar 来处理 MozillaCookieJar。所以问题的根源很可能在更底层的标准库，而不是 requests 本身。
+
+如何验证和解决
+你的“下一步建议”非常对，就是直接去验证这个猜想。我将你的思路具体化为一个可以立即执行的方案。
+
+步骤 1: 在 Brazil 环境中精确定位“问题行”
+这个脚本的目的是，不使用 cookiejar.load() 这个黑盒，而是手动逐行读取，并尝试让 cookiejar 一次只加载一行，看看它在哪一行“噎住”了。
+
+在 ~/workplace/turtle-cli-workspace/src/TurtleWebUiCLI 目录下创建一个临时的 debug 脚本，例如 debug_cookie_parser.py：
+
+Python
+
+# debug_cookie_parser.py
+import http.cookiejar
+import os
+from pathlib import Path
+
+# 确认 cookie 文件路径
+cookie_file = Path.home() / ".midway" / "cookie"
+print(f"--- Attempting to read cookie file from: {cookie_file} ---")
+print(f"--- File exists: {cookie_file.exists()} ---")
+
+# 读取原始文件内容
+try:
+    with open(cookie_file, 'r') as f:
+        lines = f.readlines()
+    print(f"\n--- Successfully read {len(lines)} raw lines from the file. ---")
+except Exception as e:
+    print(f"!!! Failed to read raw file: {e} !!!")
+    exit()
+
+# 逐行解析，找到罪魁祸首
+successful_cookies = 0
+for i, line in enumerate(lines):
+    line = line.strip()
+    if not line or line.startswith('#'):
+        print(f"Line {i+1}: Skipped (comment or empty)")
+        continue
+
+    # 创建一个临时的 CookieJar，只加载这一行
+    temp_jar = http.cookiejar.MozillaCookieJar()
+    
+    # 构造一个只包含当前行的文件内容，喂给 load 方法
+    # 需要在行尾加上换行符，因为 load 方法期望的是文件内容
+    try:
+        # http.cookiejar.MozillaCookieJar.load 需要一个文件名
+        # 我们用一个临时文件来模拟
+        temp_cookie_path = Path("./temp_cookie_line.txt")
+        with open(temp_cookie_path, "w") as tf:
+            tf.write(line + "\n")
+        
+        temp_jar.load(filename=str(temp_cookie_path), ignore_discard=True, ignore_expires=True)
+        
+        if len(temp_jar) > 0:
+            cookie = list(temp_jar)[0]
+            print(f"Line {i+1}: SUCCESS -> Parsed cookie: {cookie.name}={cookie.value} for domain {cookie.domain}")
+            successful_cookies += 1
+        else:
+            # 这种情况可能是 load 成功但没解析出 cookie（例如，过期了但 ignore_expires=True 通常能避免）
+            print(f"Line {i+1}: WARNING -> Loaded but no cookie was created. Raw line: '{line}'")
+
+    except Exception as e:
+        print(f"Line {i+1}: FAILED  -> Exception: {e}. Raw line: '{line}'")
+    finally:
+        if temp_cookie_path.exists():
+            os.remove(temp_cookie_path)
+
+print(f"\n--- Total cookies parsed successfully (one by one): {successful_cookies} ---")
+
+然后，在 Brazil 环境中运行它：
+
+Bash
+
+brazil-runtime-exec python debug_cookie_parser.py
+预期输出：
+这个脚本会明确告诉你哪一行或哪几行导致了解析失败 (FAILED)，以及失败的原因 (Exception)。很可能你会看到前两行 SUCCESS，然后某一行 FAILED，这行 cookie 就是与 Python 3.9 cookiejar 不兼容的。
+
+步骤 2: 编写健壮的手动解析器（最终解决方案）
+一旦定位到问题，最可靠的修复方法是不再依赖可能有版本问题的 http.cookiejar.load()，而是根据 Netscape cookie 格式手动编写一个更健壮的解析器。这个解析器只提取你需要的信息，并能容忍格式上的小瑕疵。
+
+在你的 api_client.py 中，用下面的函数替换掉所有 cookiejar.load() 的逻辑：
+
+Python
+
+import requests
+import time
+from pathlib import Path
+
+def load_cookies_robustly(session: requests.Session, cookie_file: Path):
+    """
+    Manually parses a Netscape cookie file and loads cookies into a requests.Session.
+    This is more robust against Python version differences in http.cookiejar.
+    
+    Format: domain<TAB>include_subdomains<TAB>path<TAB>secure<TAB>expires<TAB>name<TAB>value
+    """
+    print(f"Robutsly loading cookies from {cookie_file}...")
+    if not cookie_file.is_file():
+        print("Cookie file not found.")
+        return
+
+    with open(cookie_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            try:
+                parts = line.split('\t')
+                if len(parts) != 7:
+                    # 有些cookie文件可能只有6列，没有include_subdomains
+                    if len(parts) == 6:
+                        parts.insert(1, 'FALSE') # 插入默认值
+                    else:
+                        print(f"Skipping malformed cookie line (columns != 7): {line}")
+                        continue
+
+                domain, _, path, secure, expires, name, value = parts
+                
+                # requests 的 cookiejar 需要 expires 是 Unix apoch time
+                # 如果 expires 是 0 或空，表示 session cookie
+                expires_ts = None
+                if expires and expires.isdigit() and int(expires) > 0:
+                    expires_ts = int(expires)
+
+                # 创建 cookie 对象
+                cookie = requests.cookies.create_cookie(
+                    name=name,
+                    value=value,
+                    domain=domain,
+                    path=path,
+                    secure=secure.upper() == 'TRUE',
+                    expires=expires_ts,
+                    rest={'HttpOnly': None}, # requests能处理这个
+                    # 如果需要强制设置 domain 前缀的点
+                    # domain_initial_dot=domain.startswith('.')
+                )
+                session.cookies.set_cookie(cookie)
+
+            except Exception as e:
+                print(f"Error parsing line, skipping. Error: {e}, Line: '{line}'")
+    
+    print(f"Finished loading. Total cookies in session: {len(session.cookies)}")
+
+# --- 在你的主逻辑中这样使用 ---
+# session = requests.Session()
+# cookie_file_path = Path.home() / ".midway" / "cookie"
+# load_cookies_robustly(session, cookie_file_path)
+# 
+# # 现在 session.cookies 就包含了所有解析出的 cookie
+# response = session.get(...)
+这个手动解析的方法几乎可以保证在任何 Python 版本下行为一致，因为它不依赖 http.cookiejar 的内部实现细节，从而彻底解决了环境差异问题。
+
 而是 Brazil 并没有拿到你最新那段“手动逐行解析、包含 #HttpOnly_ 前缀” 的代码，而是还在用旧版的 MozillaCookieJar.load()（它会把绝大多数行都当成注释丢掉，所以最终只剩两条）。
 
 下一步检查和修复流程
