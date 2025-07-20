@@ -1,3 +1,70 @@
+1）在加载前『手动』把 #HttpOnly_ 前缀去掉
+python
+Copy
+Edit
+from pathlib import Path
+import http.cookiejar
+
+def setup_cookies(self):
+    cookie_file = Path.home()/'.midway'/'cookie'
+    raw = cookie_file.read_text().splitlines()
+    # 把 "#HttpOnly_domain" → "domain"
+    cleaned = [ line[10:] if line.startswith('#HttpOnly_') else line
+                for line in raw ]
+    jar = http.cookiejar.MozillaCookieJar()
+    # 直接用 _really_load 把清理后的行喂进去
+    jar._really_load(cleaned, ignore_discard=True, ignore_expires=True)
+    # 把所有 cookie 注入 session
+    for c in jar:
+        self.session.cookies.set_cookie(c)
+这样完全绕过旧版 load() 把 #… 全部当注释丢弃的坑。
+
+2）Vendor 一份 Python 3.12 版的 _really_load / load 实现
+把 3.12 源码里对 #HttpOnly_ 的那段逻辑（它会把行首 #HttpOnly_ 去掉并当成有效行）复制到你自己项目里，然后在 Brazil 里 override：
+
+python
+Copy
+Edit
+# 在包初始化时打一个 monkey-patch：
+import http.cookiejar
+from http.cookiejar import MozillaCookieJar
+
+def _load_with_http_only(self, f, ignore_discard, ignore_expires):
+    lines = []
+    for raw in f:
+        line = raw.rstrip('\n')
+        if not line or (line.startswith('#') and not line.startswith('#HttpOnly_')):
+            continue
+        if line.startswith('#HttpOnly_'):
+            line = line[10:]
+        lines.append(line)
+    return self._really_load(lines, ignore_discard, ignore_expires)
+
+# 把旧版 load 换掉
+MozillaCookieJar._really_load = MozillaCookieJar._really_load  # 保留原逻辑
+MozillaCookieJar.load = _load_with_http_only  # 覆盖
+这样就不会丢 #HttpOnly_… 那 11 条行了。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 你好！这是一个非常经典且棘手的环境差异问题。你已经做了非常详尽的排查，思路清晰，日志和验证过程都非常专业。这为定位问题提供了巨大帮助。
 
 根据你提供的所有信息，最有可能的原因是 Python 版本差异（本地 3.12 vs. Brazil 3.9）导致的 http.cookiejar 库在解析 Cookie 文件时的行为不一致。
