@@ -1,3 +1,70 @@
+
+其实这并不是文件权限或者 Brazil 只能读到部分文件内容的锅，而是 Brazil 绑死在 Python 3.9 运行时里，那个版本的 http.cookiejar.MozillaCookieJar.load() 会把所有以 # 开头的行（包括 #HttpOnly_…）都当成注释整行丢弃——所以你跑 Python 3.12（它在新版里专门识别 #HttpOnly_ 前缀）能拿到 13 条以上的 cookie，而跑 Brazil（3.9）就只剩下真正以域名开头、没有注释标记的 2 条。
+
+核心原因
+Python 3.9 的 cookiejar.load
+只看每行是不是以 # 开头，如果是就直接跳过，不管它是不是 #HttpOnly_…。
+
+Python 3.12 里修好了
+3.12 在 load() 里专门把 #HttpOnly_ 前缀剥掉再当有效行处理，所以你在本地跑 3.12 能拿到全部。
+
+Brazil 的运行时无法升级，唯一办法就是自己在应用层「还原」这部分逻辑。
+
+可选方案
+1）预处理文本，去掉 #HttpOnly_ 前缀
+python
+Copy
+Edit
+from pathlib import Path
+import http.cookiejar
+
+def setup_cookies(self):
+    cookie_file = Path.home()/".midway"/"cookie"
+    raw = cookie_file.read_text().splitlines()
+    # 把 "#HttpOnly_" 前缀手动去掉，再当成有效行
+    cleaned = [
+      line[10:] if line.startswith("#HttpOnly_") else line
+      for line in raw
+    ]
+    jar = http.cookiejar.MozillaCookieJar()
+    # 直接把清理过的行 _really_load 进来
+    jar._really_load(cleaned, ignore_discard=True, ignore_expires=True)
+    # 注入到 session
+    for c in jar:
+        self.session.cookies.set_cookie(c)
+2）Monkey‑patch 老版的 load() 行为
+python
+Copy
+Edit
+import http.cookiejar
+from http.cookiejar import MozillaCookieJar
+
+def _load_with_http_only(self, f, ignore_discard, ignore_expires):
+    lines = []
+    for raw in f:
+        line = raw.rstrip("\n")
+        # 只跳过除 #HttpOnly_ 以外的注释
+        if not line or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+            continue
+        if line.startswith("#HttpOnly_"):
+            line = line[10:]
+        lines.append(line)
+    return self._really_load(lines, ignore_discard, ignore_expires)
+
+# 覆盖
+MozillaCookieJar.load = _load_with_http_only
+这样一来，无论是在本地 Python 还是在 Brazil 里跑，所有带 #HttpOnly_ 标记的行都会被当作正常 cookie 加载，就能在 Brazil 下也拿到完整的 13（或 15） 条了。
+
+
+
+
+
+
+
+
+
+
+
 1）在加载前『手动』把 #HttpOnly_ 前缀去掉
 python
 Copy
