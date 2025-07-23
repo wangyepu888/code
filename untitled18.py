@@ -1,3 +1,4 @@
+PYTHONPATH=$PWD/src/TurtleWebUICLI/src brazilpython test
 你看到的“还是旧代码”基本只有几种原因——尤其在 Brazil/pytest 环境里最常见的是：测试并没有直接用你改过的源码，而是用上一次 build 出来的 wheel/site-packages 里的旧版本。照下面排查，一步就能定位。
 
 
