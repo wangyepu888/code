@@ -1,3 +1,109 @@
+非常好问题！
+
+> ✅ 你可以把一个 CR 移动到另一个分支，但不是“直接移动”，而是通过：
+
+1. 将你的新分支 push 到远程
+
+
+2. 然后使用 cr --update CR-xxxxxx 指定新的分支来更新已有 CR
+
+
+
+
+
+
+---
+
+✅ 所以结论是：
+
+> ✔️ 是的，你可以“移动”一个 CR 到另外一个分支，只要新分支包含你想要的内容，并更新 CR 指向它即可。
+
+
+
+
+---
+
+✅ 推荐操作流程（一步步）：
+
+🔧 1. 从干净分支（如 main）创建一个新分支
+
+git checkout main
+git pull  # 确保最新
+git checkout -b clean_fix_cr
+
+
+---
+
+🔧 2. cherry-pick 你想保留的 commit（来自旧分支）
+
+git cherry-pick <commit-sha>
+
+你可以用 git log 先查 commit ID，例如你要保留的那次提交内容是 “Simplify API client”。
+
+
+---
+
+🔧 3. 确认没有其他污染文件（如 test_utils.py）
+
+git status
+git diff
+
+确保这个新分支只包含你想放入 CR 的干净内容。
+
+
+---
+
+🔧 4. 推送新分支
+
+git push origin clean_fix_cr
+
+
+---
+
+🔧 5. 用 Brazil CR 工具更新旧的 CR 到新分支
+
+mwinit -o -s  # 如果 session 失效
+cr --update CR-209861210 -p clean_fix_cr
+
+> -p clean_fix_cr 指定新的分支
+这样你就把这个 CR 绑定到新分支了，原来的污染内容（test_utils）也就不再执行了。
+
+
+
+
+---
+
+✅ CR 系统背后的逻辑（AWS Brazil）
+
+操作	行为
+
+cr --update 默认更新当前分支	✅
+cr --update CR-xxx -p new_branch	✅ 指定新的分支作为 source，重定向 CR 内容
+一个 CR 多分支切换	✅ 合法，只要你指定 -p
+重建分支后更新 CR，会保留讨论、review 评论等	✅ 会保留，内容会刷新为新分支内容
+
+
+
+---
+
+✅ 总结操作命令模板
+
+# 创建干净分支
+git checkout main
+git checkout -b clean_fix_cr
+git cherry-pick <your-good-commit-sha>
+git push origin clean_fix_cr
+
+# 更新原有 CR 到新分支
+cr --update CR-209861210 -p clean_fix_cr
+
+
+---
+
+如果你提供你想保留的 commit ID，我可以帮你直接生成整套命令。要吗？
+
+
+
 你这张图非常关键，确实表明：
 
 > ❗️你现在不能成功运行 cr 命令更新 CR，因为环境变量和路径设置有误、命令格式也错了。
