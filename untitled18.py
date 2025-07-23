@@ -1,3 +1,113 @@
+你看到的“还是旧代码”基本只有几种原因——尤其在 Brazil/pytest 环境里最常见的是：测试并没有直接用你改过的源码，而是用上一次 build 出来的 wheel/site-packages 里的旧版本。照下面排查，一步就能定位。
+
+
+---
+
+先确认到底加载了哪份文件
+
+在你的 workspace 根目录跑（或在失败的 Dry-Run 容器里跑）：
+
+brazil-runtime-exec python - <<'PY'
+import turtle_web_ui_cli, sys
+print("MODULE FILE:", turtle_web_ui_cli.__file__)
+print("FIRST PATHS:", sys.path[:5])
+PY
+
+如果输出是 .../build/lib/python3.9/site-packages/... 或 .../site-packages/turtle_web_ui_cli-1.0.0.dist-info/...，说明用的是打包产物，不是你 src 下那份。
+
+如果是 .../workspace/src/TurtleWebUICLI/src/turtle_web_ui_cli/... 才是最新源码。
+
+
+
+---
+
+怎么让测试用“最新源码”
+
+1. 本地跑前清干净
+
+brazil-build clean
+rm -rf build dist .pytest_cache **/*.pyc
+
+
+2. 把源码目录提前到 PYTHONPATH（多份 workspace 时尤为重要）
+
+在 test/conftest.py 或每个 test 文件开头加：
+
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src/TurtleWebUICLI/src")))
+
+或在 Brazil test 命令里加：
+PYTHONPATH=$PWD/src/TurtleWebUICLI/src brazilpython test
+
+
+
+3. bump 版本号，强制重建 wheel
+setup.py 把 version="1.0.0" 改成 1.0.1。PB/pytest 会重新安装新 wheel，不会复用旧的。
+
+
+4. 本地先模拟 CR 的 release 阶段
+
+brazilpython release
+
+这一步会跑 mypy/打包/测试，提前暴露问题。
+
+
+5. pytest 用 --cache-clear
+brazilpython test -- -s -vv --cache-clear -k test_api_client
+
+
+6. 删除旧安装（如果你曾 pip install 过）
+
+brazil-runtime-exec pip uninstall turtlewebuicli -y || true
+
+
+
+
+---
+
+你截图里的具体报错（get_zone_info 未定义）
+
+这正是“加载旧文件”的典型迹象：
+
+你新代码里已经实现了 get_zone_info（或改了名字），但测试加载到旧模块当然找不到。
+
+或者你的测试用例路径导入了另一份同名包（多 workspace 或多 copy）。把 print(__file__) 放在被测模块顶部，也能立刻看出来。
+
+
+
+---
+
+如果 Dry-Run/CR 上还是旧结果
+
+Dry-Run 每次都会在干净容器里 build，但如果 Issue URL 不指向当前 CR 或 CR 还显示上一条 Dry-Run 的失败结果，要在 CR 上点 Retry。
+
+若 Auto-merge 依赖失败（权限问题），日志里会写清楚，得让 owner merge 或每次勾选自动合并。
+
+版本号不变也会导致 PB 复用旧 wheel，记住每次 +0.0.1。
+
+
+
+---
+
+小结 Checklist
+
+[ ] 用 print(module.__file__) 确认加载路径。
+
+[ ] brazil-build clean + bump 版本号。
+
+[ ] PYTHONPATH 指向 src，或 conftest.py 注入路径。
+
+[ ] brazilpython release 本地先跑。
+
+[ ] Dry-Run 时勾 Auto-merge Dependencies，Issue URL 指向当前 CR。
+
+[ ] CR 页面点 Retry 同步最新 Dry-Run。
+
+
+把“MODULE FILE”那行输出贴给我，我能马上告诉你下一步怎么改。💪
+
+祝顺利搞定！
+
 
 其实这并不是文件权限或者 Brazil 只能读到部分文件内容的锅，而是 Brazil 绑死在 Python 3.9 运行时里，那个版本的 http.cookiejar.MozillaCookieJar.load() 会把所有以 # 开头的行（包括 #HttpOnly_…）都当成注释整行丢弃——所以你跑 Python 3.12（它在新版里专门识别 #HttpOnly_ 前缀）能拿到 13 条以上的 cookie，而跑 Brazil（3.9）就只剩下真正以域名开头、没有注释标记的 2 条。
 
