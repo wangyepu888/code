@@ -1,3 +1,131 @@
+你现在的截图已经非常接近成功了 ✅，我来帮你一眼看清问题并告诉你怎么马上解决。
+
+
+---
+
+🔍 当前核心状态总结：
+
+✅ 你运行了：
+
+cr --update CR-209861210
+
+系统回应：
+
+Your package is unmodified. Nothing to make a code review of.
+
+说明：
+
+> 你当前所在的 Brazil package（TurtleWebUiCLI）是有效的 ✅，但你没有任何新改动，所以 Brazil 不知道你要提交什么更新。
+
+
+
+
+---
+
+✅ 你之后运行的：
+
+cr -a -p api_client --update CR-209861210
+
+结果是：
+
+No such file or directory .../src/TurtleWebUiCLI/--p
+
+这是因为你把命令格式写错了（--update 写在了 -p 之后，命令被误解析了）
+
+
+---
+
+✅ 最核心问题：你当前分支叫 api_client，但这个分支并没有任何新 commit，所以 Brazil CLI 认为你“没有东西可提交”。
+
+
+---
+
+✅ 你现在的状态一目了然：
+
+状态	说明
+
+Brazil package 有效	✅ TurtleWebUiCLI 已识别成功
+你在 api_client 分支上	✅
+分支与远程同步，工作区干净	✅ nothing to commit
+所以 cr --update 无事可做	✅
+cr -a -p 命令写错导致解析失败	❌ 参数顺序错了
+
+
+
+---
+
+✅ 快速解决办法（3 种方案，任选其一）
+
+
+---
+
+✅ 方案 1：你只是想更新 CR（但没改动），那就先随便改一点再触发更新
+
+touch dummy.py
+git add dummy.py
+git commit -m "Trigger CR update"
+git push origin api_client
+cr --update CR-209861210
+
+之后你可以再删掉 dummy.py，目的是让 Brazil CLI 识别你有变更。
+
+
+---
+
+✅ 方案 2：你想把 CR 换到另一个新分支（更推荐）
+
+git checkout main
+git checkout -b clean_api_cr
+git cherry-pick <你真正的 commit id>   # 或只复制 api_client.py
+git push origin clean_api_cr
+
+cr --update CR-209861210 -p clean_api_cr
+
+
+---
+
+✅ 方案 3：你想重新建一个 CR（干净一点）
+
+cr -a -p api_client \
+  --title "Simplify API client" \
+  -d "Clean branch, removed test_utils.py"
+
+
+---
+
+✅ 最终建议：你只需要做 2 件事
+
+✅ 保证当前分支有 commit
+
+git commit -m "..."  # 有 commit 才能触发 Brazil review 更新
+git push
+
+✅ 保证 cr 命令格式正确
+
+cr --update CR-209861210 -p api_client
+
+✅ 注意：--update 应该写在最前面，-p（分支）在最后。
+
+
+---
+
+❗错误命令修正对比
+
+错误	正确写法
+
+cr -a -p api_client --update ...	❌（无效）
+cr --update CR-209861210 -p api_client	✅ 正确
+
+
+
+---
+
+是否需要我根据你现有的提交 log，帮你写一套 cherry-pick 到新分支、更新 CR 的命令合集？只要你发个 git log --oneline 截图我就能帮你完成。
+
+
+
+
+
 非常好问题！
 
 > ✅ 你可以把一个 CR 移动到另一个分支，但不是“直接移动”，而是通过：
